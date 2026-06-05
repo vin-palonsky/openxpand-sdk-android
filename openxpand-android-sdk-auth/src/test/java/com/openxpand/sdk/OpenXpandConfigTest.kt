@@ -8,7 +8,8 @@ class OpenXpandConfigTest {
     private val config = OpenXpandConfig(
         clientId = "test-client",
         tenant = "acme",
-        redirectUri = "https://app.example.com/callback"
+        redirectUri = "https://app.example.com/callback",
+        onSecurityProviderStatus = {}
     )
 
     @Test

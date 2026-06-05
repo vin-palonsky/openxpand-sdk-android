@@ -53,7 +53,10 @@ import com.openxpand.sdk.OpenXpandConfig
 val config = OpenXpandConfig(
     clientId = "my-client-id",
     tenant = "my-tenant",
-    redirectUri = "https://my-app.com/callback"
+    redirectUri = "https://my-app.com/callback",
+    onSecurityProviderStatus = { status ->
+        // Required: react to provider check result (UpToDate/UserActionRequired/NotAvailable/Error)
+    }
 )
 ```
 
@@ -90,6 +93,8 @@ val auth = OpenXpandAuth(
     config = config
 )
 ```
+
+**Important:** When `OpenXpandAuth` is instantiated, the SDK starts an **asynchronous background process** to check and update the Android security provider using Google Play services. This process is non-blocking and does not affect the constructor. However, **all subsequent network operations wait for this check to complete** before proceeding. See [Security Provider Updates](#security-provider-updates) for details on how to configure a callback to be notified if the check fails.
 
 ## Authentication methods
 
@@ -290,9 +295,176 @@ The SDK declares the following permissions in its manifest (merged automatically
 
 The SDK includes a `network_security_config.xml` that allows cleartext (HTTP) traffic to `*.openxpand.com`, required by the cellular method. This configuration is merged automatically into the app manifest.
 
+## Security Provider Updates
+
+The Android security provider is patched periodically by Google to protect against known TLS/SSL vulnerabilities. The SDK automatically keeps the security provider up-to-date using Google Play services and ensures network operations do not proceed if the provider cannot be updated.
+
+### Automatic behavior: Async initialization with gating
+
+When an `OpenXpandAuth` instance is created, the SDK **immediately** initiates a non-blocking asynchronous check of the security provider status:
+
+```kotlin
+val auth = OpenXpandAuth(context = applicationContext, config = config)
+// Security provider check started asynchronously in the background
+// Network operations will wait for this check to complete before proceeding
+```
+
+**Important:** All network operations (`authorize()`, `authenticate()`, `verifyNumber()`, etc.) **wait for this check to complete** before making any network calls. This ensures the provider is updated before any secure communication.
+
+### Gating policy: What happens when the check completes
+
+| Provider Status | Behavior |
+|-----------------|----------|
+| ✅ **Up-to-date** | Callback invoked with `UpToDate`; network operations proceed normally |
+| ⚠️ **UserActionRequired** | Callback invoked; network operations blocked with error result |
+| ❌ **NotAvailable** | Callback invoked; network operations blocked with error result |
+| ❌ **Error** | Callback invoked; network operations blocked with error result |
+
+### Notification callback: Informing the host app about provider issues
+
+Configure the required callback in `OpenXpandConfig` to be notified when the security provider check completes:
+
+```kotlin
+val config = OpenXpandConfig(
+    clientId = "my-client-id",
+    tenant = "my-tenant",
+    redirectUri = "https://my-app.com/callback",
+    // Required: notify the app when provider check finishes
+    onSecurityProviderStatus = { status ->
+        when (status) {
+            is SecurityProviderStatus.UserActionRequired -> {
+                // Google Play services needs user intervention
+                // Use com.google.android.gms.common.GoogleApiAvailability.getErrorDialog()
+                // to prompt the user to update/enable/install Google Play services
+                Log.w("SecurityProvider", "User action required: status code ${status.statusCode}")
+                // Show UI to user on main thread
+            }
+            is SecurityProviderStatus.NotAvailable -> {
+                Log.e("SecurityProvider", "Google Play services not available on device")
+                // Inform user that device may be vulnerable
+            }
+            is SecurityProviderStatus.Error -> {
+                Log.e("SecurityProvider", "Provider update failed: ${status.message}")
+                // Handle error gracefully
+            }
+            is SecurityProviderStatus.UpToDate -> {
+                Log.i("SecurityProvider", "Provider is up-to-date")
+            }
+        }
+    }
+)
+
+val auth = OpenXpandAuth(context = applicationContext, config = config)
+```
+
+**Note:** The callback is invoked from a **background thread**. Update UI from the main thread using `runOnUiThread()` or similar.
+
+### Native Android resolution flow (recommended)
+
+If you receive `SecurityProviderStatus.UserActionRequired`, use the standard Google Play services dialog so the user can update/enable/install what is needed.
+
+```kotlin
+import android.os.Bundle
+import androidx.appcompat.app.AppCompatActivity
+import com.google.android.gms.common.GoogleApiAvailability
+import com.openxpand.sdk.OpenXpandAuth
+import com.openxpand.sdk.OpenXpandConfig
+import com.openxpand.sdk.SecurityProviderStatus
+
+class MainActivity : AppCompatActivity() {
+
+    private var retryProviderInstall = false
+    private lateinit var auth: OpenXpandAuth
+
+    companion object {
+        private const val ERROR_DIALOG_REQUEST_CODE = 1001
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val config = OpenXpandConfig(
+            clientId = "my-client-id",
+            tenant = "my-tenant",
+            redirectUri = "https://my-app.com/callback",
+            onSecurityProviderStatus = { status ->
+                when (status) {
+                    is SecurityProviderStatus.UserActionRequired -> {
+                        runOnUiThread {
+                            val availability = GoogleApiAvailability.getInstance()
+                            if (availability.isUserResolvableError(status.statusCode)) {
+                                availability.showErrorDialogFragment(
+                                    this,
+                                    status.statusCode,
+                                    ERROR_DIALOG_REQUEST_CODE
+                                ) {
+                                    // User canceled dialog. Keep requests blocked.
+                                }
+                            }
+                        }
+                    }
+                    is SecurityProviderStatus.NotAvailable -> {
+                        // Non-recoverable on this device. Keep requests blocked and show your own UI.
+                    }
+                    is SecurityProviderStatus.Error -> {
+                        // Unexpected provider-check error. Keep requests blocked and show your own UI.
+                    }
+                    is SecurityProviderStatus.UpToDate -> {
+                        // Provider check succeeded.
+                    }
+                }
+            }
+        )
+
+        auth = OpenXpandAuth(applicationContext, config)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == ERROR_DIALOG_REQUEST_CODE) {
+            // User returned from Play services resolution UI; retry provider installation path.
+            retryProviderInstall = true
+        }
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        if (retryProviderInstall) {
+            retryProviderInstall = false
+            // Re-create auth to trigger provider check again, or expose your own re-init action.
+            // auth = OpenXpandAuth(applicationContext, config)
+        }
+    }
+}
+```
+
+This is the same native flow recommended by Android/Google for `ProviderInstaller`: show a resolvable error dialog when possible, then retry after the user returns.
+
+### Network operation blocking behavior
+
+```kotlin
+// Example: Provider update fails
+val auth = OpenXpandAuth(context, config)
+
+// This call waits for the provider check, then blocks on non-success:
+val result = auth.authorize()
+
+when (result) {
+    is AuthorizationResult.Success -> { /* ... */ }
+    is AuthorizationResult.Error -> {
+        // "Cannot proceed: Google Play services not available on device"
+        // "Cannot proceed: security provider update failed (message)"
+        // "Cannot proceed: user action required to update Google Play services (status: ...)"
+    }
+}
+```
+
+All public methods (`authorize()`, `authenticate()`, `authenticateViaIpPort()`, `authenticateViaCellular()`, `verifyNumber()`) follow this same gating pattern.
+
 ## Dependencies
 
 | Library | Version | Usage |
 |---------|---------|-------|
 | OkHttp | 4.12.0 | HTTP client |
 | Kotlin Coroutines Android | 1.7.3 | Async/suspend |
+| Google Play services (base) | 18.3.0 | Security provider updates |

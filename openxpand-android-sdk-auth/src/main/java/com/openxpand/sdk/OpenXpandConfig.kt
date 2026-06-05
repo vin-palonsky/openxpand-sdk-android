@@ -36,7 +36,21 @@ data class OpenXpandConfig(
      * longer than 10 s to wake from idle when WiFi is active.
      * Increase to 20 000–30 000 on affected devices.
      */
-    val cellularNetworkTimeoutMs: Int = 20_000
+    val cellularNetworkTimeoutMs: Int = 20_000,
+    /**
+     * Callback invoked when the security provider update check completes.
+     *
+     * Invoked with [SecurityProviderStatus.UpToDate], [SecurityProviderStatus.UserActionRequired],
+     * [SecurityProviderStatus.NotAvailable], or [SecurityProviderStatus.Error].
+     *
+     * Use this to inform the user that the device's security provider is outdated or unavailable,
+     * especially for [UserActionRequired] which requires user intervention.
+     *
+     * **Important:** This is called from a background thread. Update UI from the main thread.
+     * Network operations are released only when provider update succeeds; on any non-success result,
+     * SDK operations return typed errors and no network call is executed.
+     */
+    val onSecurityProviderStatus: (SecurityProviderStatus) -> Unit
 ) {
     val authEndpoint: String
         get() =

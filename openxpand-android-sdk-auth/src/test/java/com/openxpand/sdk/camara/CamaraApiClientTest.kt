@@ -22,7 +22,8 @@ class CamaraApiClientTest {
             clientId = "test-client",
             tenant = "acme",
             redirectUri = "https://app.example.com/callback",
-            baseCamaraApiUrl = mockServer.url("/").toString().trimEnd('/')
+            baseCamaraApiUrl = mockServer.url("/").toString().trimEnd('/'),
+            onSecurityProviderStatus = {}
         )
         client = CamaraApiClient(config)
     }

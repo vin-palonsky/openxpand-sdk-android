@@ -23,7 +23,8 @@ class TokenExchangerTest {
             clientId = "test-client",
             tenant = "acme",
             redirectUri = "https://app.example.com/callback",
-            baseGatewayUrl = mockServer.url("/").toString().trimEnd('/')
+            baseGatewayUrl = mockServer.url("/").toString().trimEnd('/'),
+            onSecurityProviderStatus = {}
         )
         exchanger = TokenExchanger(config)
     }
@@ -87,7 +88,8 @@ class TokenExchangerTest {
             tenant = "acme",
             redirectUri = "https://app.example.com/callback",
             clientSecret = "my-secret",
-            baseGatewayUrl = mockServer.url("/").toString().trimEnd('/')
+            baseGatewayUrl = mockServer.url("/").toString().trimEnd('/'),
+            onSecurityProviderStatus = {}
         )
         TokenExchanger(config).exchange("code", "verifier")
 
